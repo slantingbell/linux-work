@@ -33,6 +33,12 @@ llm-stream-system/
 │
 └── Makefile
 
+通信协议
+通信方向	消息格式	结束条件
+Client → Server	文本内容 + \0	遇到 \0
+Server → Client	流式响应 + <END>	遇到 <END>
+
+
 ## client
 ### clinet
 用户输入
