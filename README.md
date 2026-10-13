@@ -15,6 +15,8 @@ llm-stream-system/
 ├── client/                    # C客户端
 │   ├── client.c               # 客户端程序
 │   ├── config.h               # 客户端配置
+│   ├── socket_client.c        # TCP套接字封装
+│   ├── socket_client.h        
 │
 ├── llm/                       # LLM调用模块
 │   ├── llama_client.c         # 调用 llama.cpp API
@@ -30,6 +32,12 @@ llm-stream-system/
 │   └── client.log
 │
 └── Makefile
+
+通信协议
+通信方向	消息格式	结束条件
+Client → Server	文本内容 + \0	遇到 \0
+Server → Client	流式响应 + <END>	遇到 <END>
+
 
 ## client
 ### clinet
