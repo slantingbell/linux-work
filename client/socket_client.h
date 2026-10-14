@@ -1,7 +1,9 @@
 #ifndef SOCKET_CLIENT_H
 #define SOCKET_CLIENT_H
-#include "client.h"
+#include "client_config.h"
 // 创建连接
+//成功 return socketid
+//失败 return -1
 int client_connect(
     const char *ip,
     int port
