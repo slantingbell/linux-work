@@ -1,4 +1,4 @@
-#include "client.h"
+#include "client_config.h"
 #include"socket_client.h"
 #include <stdio.h>
 #include <string.h>
@@ -54,7 +54,7 @@ int client_connect(            //（对面的ip地址，对面的端口）
     if (connect(
             sockfd,  //指定建立连接的套接字
             (struct sockaddr *)&server_addr, //指定要访问地址信息结构体
-            sizeof(server_addr) //指定要读取的地址范围
+            sizeof(server_addr) //指定要读取的地址结构体大小，不同地址结构体大小不一样
         ) < 0) 
     {
         perror("connect");
@@ -81,7 +81,7 @@ int client_send(int sockfd, const char *msg)  //（套接字id,要发送的信�
     {
         ssize_t n = send(  //返回send已经发送的字符的数量，使用ssize_t防止信息有负数
             sockfd, //发送的套接字接口
-            msg + sent, //要发送的信息的歧视地址
+            msg + sent, //要发送的信息的起始地址
             len - sent, //要发送的信息的总长度
             0
         );
@@ -94,7 +94,7 @@ int client_send(int sockfd, const char *msg)  //（套接字id,要发送的信�
             }
             return -1;
         }
-        if (n == 0) 
+        if (n == 0)  //防止无限循环
         {
             return -1;
         }
@@ -103,10 +103,11 @@ int client_send(int sockfd, const char *msg)  //（套接字id,要发送的信�
     }
 }
 //接收流式信息并输出
+//可重构
 int client_receive_stream(struct client_connection *conn)
 {
     if (conn == NULL || conn->sockfd < 0 ||                  //检查持久缓冲区是否合法
-        conn->receive_len > sizeof(conn->receive_buffer))
+        conn->receive_len > sizeof(conn->receive_buffer))    //为什么需要持久缓冲区：TCP式流式接收返回的信息，如果本次临时缓冲区包含了下一轮问答中返回的信息，本轮问答结束
     {
         return -1;
     }

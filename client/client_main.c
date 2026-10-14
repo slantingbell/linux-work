@@ -5,7 +5,7 @@
 
 #include "socket_client.h"
 #include "client_io.h"
-#include "client.h"
+#include "client_config.h"
 
 int main(void)
 {
