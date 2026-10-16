@@ -1,6 +1,7 @@
 #include <sys/types.h>
 #include <stddef.h>
 #include <errno.h>
+#include <stdarg.h>
 #include <curl/curl.h>
 #include <json-c/json.h>
 #include <stdio.h>
@@ -20,7 +21,7 @@ ssize_t client_receive_request(
         return -1;
     }
 
-    char incoming[2048]; //临时缓冲区
+    char incoming[2048]; //临时缓冲区server
     size_t used = 0;  //提示词缓冲区记录已经接收到的字节数
 
     while (1) {
@@ -81,11 +82,47 @@ ssize_t client_receive_request(
     }
 }
 
+#define ERR_SNIPPET_CAP 192 // 保留的响应体片段上限：出错时后端写的原因就在这里
+
 struct stream_context {
     llm_stream_callback callback;
     void *userdata;
     int callback_failed;
+    /*
+     * 响应体开头的一小段原始字节。
+     * 推理成功时这里是无用的 SSE 前几个字节；推理失败时
+     * llama-server 会把真正的失败原因写在这里（例如 "exceeds the context size"）。
+     * 出错才取用，所以正常路径上没有额外开销。
+     */
+    char snippet[ERR_SNIPPET_CAP + 1];
+    size_t snippet_len;
 };
+
+// 写失败原因；errbuf 为 NULL 时静默忽略
+static void set_error(char *errbuf, size_t errcap, const char *fmt, ...)
+{
+    if (errbuf == NULL || errcap == 0) {
+        return;
+    }
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(errbuf, errcap, fmt, ap);
+    va_end(ap);
+}
+
+// 取不超过 max 的字符串长度，且不把一个 UTF-8 字符切成两半
+static size_t utf8_safe_len(const char *s, size_t len, size_t max)
+{
+    if (len <= max) {
+        return len;
+    }
+    size_t n = max;
+    // 回退到字符起始字节（续字节形如 10xxxxxx）
+    while (n > 0 && ((unsigned char)s[n] & 0xC0) == 0x80) {
+        n--;
+    }
+    return n;
+}
 
 /*
  * libcurl 每次收到响应数据时调用此函数。
@@ -109,6 +146,15 @@ static size_t on_http_data(
         return 0;
     }
 
+    // 留一段响应体原文，供失败时定位原因
+    size_t room = ERR_SNIPPET_CAP - ctx->snippet_len;
+    if (room > 0) {
+        size_t take = len < room ? len : room;
+        memcpy(ctx->snippet + ctx->snippet_len, ptr, take);
+        ctx->snippet_len += take;
+        ctx->snippet[ctx->snippet_len] = '\0';
+    }
+
     if (ctx->callback != NULL) {
         if (ctx->callback(ptr, len, ctx->userdata) != 0) {
             ctx->callback_failed = 1;
@@ -122,8 +168,12 @@ static size_t on_http_data(
 int llm_generate_stream(
     const char *base_url,
     const char *prompt,
+    const struct chat_message *history,
+    size_t history_count,
     llm_stream_callback callback,
-    void *userdata
+    void *userdata,
+    char *errbuf,
+    size_t errcap
 )
 {
     CURL *curl = NULL;
@@ -134,7 +184,8 @@ int llm_generate_stream(
     struct stream_context ctx = {
         .callback = callback,
         .userdata = userdata,
-        .callback_failed = 0
+        .callback_failed = 0,
+        .snippet_len = 0
     };
 
     CURLcode curl_rc;
@@ -142,8 +193,10 @@ int llm_generate_stream(
     int result = -1;
     char url[1024];
 
-    if (base_url == NULL || prompt == NULL || callback == NULL) {
+    if (base_url == NULL || prompt == NULL ||
+        (history_count > 0 && history == NULL) || callback == NULL) {
         fprintf(stderr, "Invalid arguments\n");
+        set_error(errbuf, errcap, "内部错误：参数非法");
         return -1;
     }
 
@@ -156,6 +209,7 @@ int llm_generate_stream(
 
     if (n < 0 || (size_t)n >= sizeof(url)) {
         fprintf(stderr, "URL is too long\n");
+        set_error(errbuf, errcap, "内部错误：后端 URL 过长");
         return -1;
     }
 
@@ -165,28 +219,34 @@ int llm_generate_stream(
     message = json_object_new_object();
 
     if (root == NULL || messages == NULL || message == NULL) {
+        set_error(errbuf, errcap, "内部错误：构建请求体失败（内存不足）");
         goto cleanup;
     }
 
-    if (json_object_object_add(
-            message,
-            "role",
-            json_object_new_string("user")) != 0 ||
-        json_object_object_add(
-            message,
-            "content",
-            json_object_new_string(prompt)) != 0) {
-        goto cleanup;
+    for (size_t i = 0; i <= history_count; i++) {
+        const char *role = i < history_count ? history[i].role : "user";
+        const char *content = i < history_count ? history[i].content : prompt;
+        message = json_object_new_object();
+        if (message == NULL ||
+            role == NULL || content == NULL ||
+            json_object_object_add(message, "role",
+                                   json_object_new_string(role)) != 0 ||
+            json_object_object_add(message, "content",
+                                   json_object_new_string(content)) != 0 ||
+            json_object_array_add(messages, message) != 0) {
+            if (message != NULL) {
+                json_object_put(message);
+                message = NULL;
+            }
+            set_error(errbuf, errcap, "内部错误：构建请求体失败");
+            goto cleanup;
+        }
+        message = NULL; /* messages 接管 message 的所有权 */
     }
-
-    /* messages 接管 message 的所有权 */
-    if (json_object_array_add(messages, message) != 0) {
-        goto cleanup;
-    }
-    message = NULL;
 
     /* root 接管 messages 的所有权 */
     if (json_object_object_add(root, "messages", messages) != 0) {
+        set_error(errbuf, errcap, "内部错误：构建请求体失败");
         goto cleanup;
     }
     messages = NULL;
@@ -195,6 +255,7 @@ int llm_generate_stream(
             root,
             "stream",
             json_object_new_boolean(1)) != 0) {
+        set_error(errbuf, errcap, "内部错误：构建请求体失败");
         goto cleanup;
     }
 
@@ -205,6 +266,7 @@ int llm_generate_stream(
         );
 
     if (request_body == NULL) {
+        set_error(errbuf, errcap, "内部错误：序列化请求体失败");
         goto cleanup;
     }
 
@@ -212,6 +274,7 @@ int llm_generate_stream(
     curl = curl_easy_init();
     if (curl == NULL) {
         fprintf(stderr, "curl_easy_init failed\n");
+        set_error(errbuf, errcap, "内部错误：初始化 HTTP 客户端失败");
         goto cleanup;
     }
 
@@ -225,6 +288,7 @@ int llm_generate_stream(
     );
 
     if (headers == NULL) {
+        set_error(errbuf, errcap, "内部错误：构建请求头失败");
         goto cleanup;
     }
 
@@ -263,6 +327,7 @@ int llm_generate_stream(
 
     if (ctx.callback_failed) {
         fprintf(stderr, "Stream callback failed\n");
+        set_error(errbuf, errcap, "向客户端写数据失败（客户端可能已断开）");
         goto cleanup;
     }
 
@@ -272,11 +337,35 @@ int llm_generate_stream(
             "HTTP request failed: %s\n",
             curl_easy_strerror(curl_rc)
         );
+        set_error(
+            errbuf,
+            errcap,
+            "无法从推理后端获取响应：%s",
+            curl_easy_strerror(curl_rc)
+        );
         goto cleanup;
     }
 
     if (http_status < 200 || http_status >= 300) {
         fprintf(stderr, "HTTP status: %ld\n", http_status);
+        /*
+         * 后端把真正的失败原因写在响应体里（例如
+         * "request (1076 tokens) exceeds the available context size"）。
+         * 以前这里只打了一行状态码就把响应体丢了，客户端只能看到空白。
+         */
+        size_t snip = utf8_safe_len(ctx.snippet, ctx.snippet_len, 160);
+        if (snip > 0) {
+            set_error(
+                errbuf,
+                errcap,
+                "推理后端返回 HTTP %ld：%.*s",
+                http_status,
+                (int)snip,
+                ctx.snippet
+            );
+        } else {
+            set_error(errbuf, errcap, "推理后端返回 HTTP %ld", http_status);
+        }
         goto cleanup;
     }
 

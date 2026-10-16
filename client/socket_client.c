@@ -71,8 +71,8 @@ int client_send(int sockfd, const char *msg)  //（套接字id,要发送的信�
     {
         return -1;
     }
-    // 计算字符串长度，不包含末尾的 '\0'
-    size_t len = strlen(msg);
+    // 计算字符串长度，包含末尾的 '\0'
+    size_t len = strlen(msg)+1;
     //标记已经发送完的字符长度
     size_t sent = 0; 
     // 循环发送，直到全部数据发送完毕，防止TCP发送缓冲区填满或者send被信号打断
@@ -101,6 +101,7 @@ int client_send(int sockfd, const char *msg)  //（套接字id,要发送的信�
         //更新已经发送的信息的长度
         sent += (size_t)n;
     }
+    return 0;
 }
 //接收流式信息并输出
 //可重构

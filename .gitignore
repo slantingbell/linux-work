@@ -1,1 +1,4 @@
 /llama.cpp/
+models/
+bin/
+bulid/
