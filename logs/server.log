@@ -940,3 +940,38 @@
 [2026-10-16 16:22:42] [INFO] 收到 prompt fd=5 pid=42290 len=6
 [2026-10-16 16:22:55] [INFO] 收到 prompt fd=5 pid=42290 len=24
 [2026-10-16 16:23:01] [INFO] 客户端断开 fd=5 pid=42290
+[2026-10-16 18:24:27] [INFO] llama-server 已启动 pid=76909
+[2026-10-16 18:25:31] [ERROR] llama-server 就绪等待超时或被中断
+[2026-10-16 18:25:36] [INFO] llama-server 已启动 pid=77191
+[2026-10-16 18:25:41] [ERROR] llama-server 就绪等待超时或被中断
+[2026-10-16 18:26:12] [INFO] llama-server 已启动 pid=77574
+[2026-10-16 18:26:34] [INFO] llama-server 已就绪 http://127.0.0.1:8080
+[2026-10-16 18:26:34] [ERROR] 监听端口 8080 失败
+[2026-10-16 18:27:28] [INFO] llama-server 已启动 pid=78046
+[2026-10-16 18:27:30] [INFO] llama-server 已就绪 http://127.0.0.1:8080
+[2026-10-16 18:27:30] [INFO] 服务已监听 port=8000
+[2026-10-16 18:27:38] [INFO] 客户端连接 127.0.0.1:53082 fd=5 pid=78115
+[2026-10-16 18:27:41] [INFO] 收到 prompt fd=5 pid=78115 len=5
+[2026-10-16 18:28:14] [INFO] 收到 prompt fd=5 pid=78115 len=6
+[2026-10-16 18:28:24] [INFO] 收到 prompt fd=5 pid=78115 len=9
+[2026-10-16 18:28:43] [INFO] 收到 prompt fd=5 pid=78115 len=5
+[2026-10-16 18:28:43] [ERROR] LLM 请求失败 fd=5 pid=78115: 推理后端返回 HTTP 400：{"error":{"code":400,"message":"[json.exception.parse_error.101] parse error at line 1, column 522: syntax error while parsing value - invalid string: ill-forme
+[2026-10-16 18:29:06] [INFO] 收到 prompt fd=5 pid=78115 len=7
+[2026-10-16 18:29:06] [ERROR] LLM 请求失败 fd=5 pid=78115: 推理后端返回 HTTP 400：{"error":{"code":400,"message":"[json.exception.parse_error.101] parse error at line 1, column 524: syntax error while parsing value - invalid string: ill-forme
+[2026-10-16 18:29:11] [INFO] 收到 prompt fd=5 pid=78115 len=3
+[2026-10-16 18:29:21] [INFO] 收到 prompt fd=5 pid=78115 len=7
+[2026-10-16 18:30:07] [INFO] 收到 prompt fd=5 pid=78115 len=8
+[2026-10-16 18:30:16] [INFO] 收到 prompt fd=5 pid=78115 len=6
+[2026-10-16 18:30:48] [INFO] 收到 prompt fd=5 pid=78115 len=29
+[2026-10-16 18:30:48] [ERROR] LLM 请求失败 fd=5 pid=78115: 推理后端返回 HTTP 400：{"error":{"code":400,"message":"[json.exception.parse_error.101] parse error at line 1, column 390: syntax error while parsing value - invalid string: ill-forme
+[2026-10-16 18:30:56] [INFO] 收到 prompt fd=5 pid=78115 len=21
+[2026-10-16 18:31:02] [INFO] 收到 prompt fd=5 pid=78115 len=21
+[2026-10-16 18:31:17] [INFO] 收到 prompt fd=5 pid=78115 len=21
+[2026-10-16 18:31:25] [INFO] 收到 prompt fd=5 pid=78115 len=4
+[2026-10-16 18:31:37] [INFO] 收到 prompt fd=5 pid=78115 len=21
+[2026-10-16 18:31:58] [INFO] 客户端连接 127.0.0.1:51428 fd=5 pid=79101
+[2026-10-16 18:32:05] [INFO] 收到 prompt fd=5 pid=79101 len=4
+[2026-10-16 18:33:06] [INFO] 收到 prompt fd=5 pid=78115 len=21
+[2026-10-16 18:33:33] [INFO] 客户端断开 fd=5 pid=79101
+[2026-10-16 18:33:40] [INFO] 客户端断开 fd=5 pid=78115
+[2026-10-16 20:08:08] [INFO] 服务已退出
