@@ -15,34 +15,17 @@
 #include "sse_parser.h"
 #include "logger.h"
 
-/*
- * llama-server 启动配置
- * 注意：可执行文件与模型使用相对路径，需从项目根目录启动本程序。
- * 迁移到 Linux 后如目录结构不同，修改这里即可。
- */
-#define LLAMA_SERVER_EXECUTABLE "./llama.cpp/.build-stale/bin/llama-server"
-#define LLAMA_MODEL_PATH        "./models/qwen2.5-1.5b-instruct-q4_k_m.gguf"
-#define LLAMA_HOST              "127.0.0.1"
-#define LLAMA_PORT              8080
-#define LLAMA_CONTEXT_SIZE      4096 
-#define LLAMA_PARALLEL          4
-#define LLAMA_READY_TIMEOUT_S   120
-
-#define PROMPT_CAP  4096      // 与客户端 INPUT_SIZE 对应
-#define STREAM_END  "<END>"   // 与客户端约定的流式结束标志
-#define HISTORY_TURNS 3
-#define HISTORY_BYTE_CAP 8192
 
 // 收到 SIGINT/SIGTERM 时置位，通知主循环退出
 static volatile sig_atomic_t g_stop = 0;
 
 static void on_signal(int sig)
 {
-    (void)sig;
+    (void)sig; //防编译器警告变量未使用
     g_stop = 1;
 }
 
-// 有子进程退出时非阻塞回收，避免僵尸进程堆积
+// 收到SIGCHLD时非阻塞回收子进程，避免僵尸进程堆积
 static void on_sigchld(int sig)
 {
     int saved_errno = errno;
@@ -63,7 +46,7 @@ static int send_all(int fd, const char *data, size_t len)
             }
             return -1;
         }
-        if (n == 0) {
+        if (n == 0) { //防止无限循环
             return -1;
         }
         sent += (size_t)n;
@@ -103,14 +86,8 @@ static int on_sse_bytes(const char *data, size_t len, void *userdata)
     return sse_parser_feed(&ctx->parser, data, len, on_token, ctx);
 }
 
-/*
- * 推理失败时，把失败原因当作正文发给客户端。
- *
- * 以前这里什么都不发、直接跟一个 <END>：客户端打出一片空白，
- * 看起来就像"模型给了个空回答"，而真正的失败原因全被吞进了服务端日志。
- * 现在原因作为普通文本先行发出，后面仍然照常跟 <END>，
- * 协议没有变化，老客户端不用改。
- */
+
+//推理失败时把失败内容标识并发送给客户端
 static int send_error_notice(int client_fd, const char *reason)
 {
     char msg[512];
@@ -121,27 +98,31 @@ static int send_error_notice(int client_fd, const char *reason)
     size_t len = (size_t)n < sizeof(msg) ? (size_t)n : sizeof(msg) - 1;
     return send_all(client_fd, msg, len);
 }
-
+//删除最早的一轮历史对话（历史对话数组，当前信息数，当前字节数）
 static void history_drop_oldest(struct chat_message *history,
                                 size_t *count, size_t *bytes)
-{
+{   //更新总的字节数
     *bytes -= strlen(history[0].content) + strlen(history[1].content);
+    //删除一轮
     free((char *)history[0].content);
     free((char *)history[1].content);
+    //移动数组
     memmove(history, history + 2, (*count - 2) * sizeof(*history));
+    //跟新总对话数
     *count -= 2;
 }
-
+//添加新一轮对话（历史对话容器，消息，总字节数，用户提示词，LLM回复）
 static int history_add_turn(struct chat_message *history, size_t *count,
                             size_t *bytes, const char *prompt,
                             const char *response)
 {
+    //计算本轮对话总大小，不超过历史对话总容量，超过直接丢弃，因为就算把所有轮的对话全删掉也装不下
     size_t prompt_len = strlen(prompt);
     size_t response_len = strlen(response);
     if (prompt_len + response_len > HISTORY_BYTE_CAP) {
         return 1;
     }
-
+    //把提示词和回答复制一份
     char *saved_prompt = strdup(prompt);
     char *saved_response = strdup(response);
     if (saved_prompt == NULL || saved_response == NULL) {
@@ -149,10 +130,10 @@ static int history_add_turn(struct chat_message *history, size_t *count,
         free(saved_response);
         return -1;
     }
-
-    while (*count + 2 > HISTORY_TURNS * 2 ||
-           *bytes + prompt_len + response_len > HISTORY_BYTE_CAP) {
-        history_drop_oldest(history, count, bytes);
+   //如果装不下或者轮数超过了就删除最早一轮，直到能装下为止
+    while (*count + 2 > HISTORY_TURNS * 2 || //轮数超了
+           *bytes + prompt_len + response_len > HISTORY_BYTE_CAP) { //当前剩余容量不足
+        history_drop_oldest(history, count, bytes); //删除最早一轮
     }
 
     history[*count] = (struct chat_message){"user", saved_prompt};
@@ -164,14 +145,16 @@ static int history_add_turn(struct chat_message *history, size_t *count,
 
 // 处理一个客户端连接：循环接收 prompt -> 调用 LLM -> 流式转发 -> 发送 <END>
 static void handle_client(int client_fd, const char *llama_url)
-{
-    char prompt[PROMPT_CAP];
-    char errbuf[512]; // llm_generate_stream 失败时写入原因
-    struct chat_message history[HISTORY_TURNS * 2];
-    size_t history_count = 0;
-    size_t history_bytes = 0;
-
+{   
+    //初始化同容器
+    char prompt[PROMPT_CAP]; //提示词缓冲区
+    char errbuf[512]; // 错误信息缓冲区
+    struct chat_message history[HISTORY_TURNS * 2]; //历史上下文数组
+    size_t history_count = 0;  //历史消息条数
+    size_t history_bytes = 0;  //历史消息条数
+ 
     for (;;) {
+        //接收提示词
         ssize_t n = client_receive_request(client_fd, prompt, sizeof(prompt));
         if (n < 0) {
             // 客户端断开或协议错误
@@ -185,108 +168,113 @@ static void handle_client(int client_fd, const char *llama_url)
             }
             continue;
         }
-
+        //写入日志
         logger_write(LOG_INFO, "收到 prompt fd=%d pid=%d len=%zd",
                      client_fd, (int)getpid(), n);
-
+        //构建本轮对话所需要的临时状态
         struct forward_ctx ctx;
         ctx.client_fd = client_fd;
         sse_parser_init(&ctx.parser);
+        //一轮回复数量记载
         ctx.response_len = 0;
         ctx.response_too_large = 0;
-
+        //是否发生错误标记
         errbuf[0] = '\0';
-        if (llm_generate_stream(llama_url, prompt, history, history_count,
+        if (llm_generate_stream(llama_url, prompt, history, history_count, //请求LLM失败
                                 on_sse_bytes, &ctx, errbuf,
                                 sizeof(errbuf)) != 0) {
-            const char *reason = errbuf[0] != '\0' ? errbuf : "未知错误";
-            logger_write(LOG_ERROR, "LLM 请求失败 fd=%d pid=%d: %s",
+            const char *reason = errbuf[0] != '\0' ? errbuf : "未知错误"; //获取失败原因
+            logger_write(LOG_ERROR, "LLM 请求失败 fd=%d pid=%d: %s",      
                          client_fd, (int)getpid(), reason);
-            // 让客户端看到失败原因，而不是让它在空白里猜
+            // 向客户端发送失败原因
             if (send_error_notice(client_fd, reason) != 0) {
                 break; // 客户端已断开
             }
-        } else if (ctx.response_too_large) {
+        } else if (ctx.response_too_large) { //请求成功，但是回答太长，拒绝加入历史上下文
             logger_write(LOG_WARN, "回答过长，不加入上下文 fd=%d pid=%d",
                          client_fd, (int)getpid());
-        } else {
+        } else { //请求成功，且回复消息的信息量足够小，写入历史上下文
             int history_rc = history_add_turn(
                 history, &history_count, &history_bytes, prompt, ctx.response);
             if (history_rc > 0) {
                 logger_write(LOG_WARN, "本轮内容超过上下文上限，未保存 fd=%d pid=%d",
                              client_fd, (int)getpid());
-            } else if (history_rc < 0) {
+            } else if (history_rc < 0) {  
                 logger_write(LOG_WARN, "保存对话上下文失败 fd=%d pid=%d",
                              client_fd, (int)getpid());
             }
         }
 
-        // 结束时都要发送结束标记，避免客户端一直等待
+        // 结束本轮对话时发送结束标志
         if (send_all(client_fd, STREAM_END, sizeof(STREAM_END) - 1) != 0) {
             break; // 客户端已断开
         }
     }
-
-    for (size_t i = 0; i < history_count; i++) {
+    //客户端断开，释放资源
+    for (size_t i = 0; i < history_count; i++) {//histpry中的消息容器时动态分配的，需要动态回收
         free((char *)history[i].content);
     }
     close(client_fd);
     logger_write(LOG_INFO, "客户端断开 fd=%d pid=%d", client_fd, (int)getpid());
 }
 
-// libcurl 写回调：健康检查的响应体直接丢弃
+// libcurl 写回调：健康检查的响应体直接丢弃(不写回调函数libcrul默认会把响应体输出到终端)
 static size_t discard_write(char *ptr, size_t size, size_t nmemb, void *userdata)
 {
     (void)ptr;
     (void)userdata;
-    return size * nmemb;
+    return size * nmemb; //返回响应体总数据量，示意libcurl所有数据处理完毕，本次请求正常
 }
 
 // 轮询 llama-server /health 直到返回 200（模型加载需要时间）
 // 返回 0 就绪；-1 超时或收到退出信号
 static int wait_llama_ready(const char *base_url, int timeout_s)
-{
+{   
+    //获取llama-server的存活信息的url接口
     char health_url[1024];
     snprintf(health_url, sizeof(health_url), "%s/health", base_url);
-
+    //初始化curl句柄
     CURL *curl = curl_easy_init();
     if (curl == NULL) {
         return -1;
     }
-
-    int ready = -1;
-    for (int i = 0; i < timeout_s * 2 && !g_stop; i++) { // 每 500ms 轮询一次
+    int ready = -1;//默认不存活
+    for (int i = 0; i < timeout_s * 2 && !g_stop; i++) { // 约每 500ms 轮询一次
         curl_easy_reset(curl);
         curl_easy_setopt(curl, CURLOPT_URL, health_url);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, discard_write);
-        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 1L);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 1L); 
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 2L);
 
-        if (curl_easy_perform(curl) == CURLE_OK) {
+        if (curl_easy_perform(curl) == CURLE_OK) { //成功发起请求
+            //获取状态码
             long code = 0;
             curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+            //确认存活，保存结果
             if (code == 200) {
                 ready = 0;
                 break;
             }
         }
+        //等待0.5s
         usleep(500 * 1000);
     }
-
+     //清理资源返回结果
     curl_easy_cleanup(curl);
     return ready;
 }
 
 int main(void)
 {
+    //初始化日志
     // 日志文件打开失败仅回退到 stderr，不影响启动
     if (logger_init("logs/server.log") != 0) {
         logger_write(LOG_WARN, "无法打开 logs/server.log，仅输出到 stderr");
     }
-
+    //初始化 libcurl
     curl_global_init(CURL_GLOBAL_DEFAULT);
 
-    // llama-server 的 HTTP 地址
+    // 写入llama-server 的 HTTP 地址
     char llama_url[64];
     snprintf(llama_url, sizeof(llama_url), "http://%s:%d", LLAMA_HOST, LLAMA_PORT);
 
@@ -299,14 +287,14 @@ int main(void)
         .context_size    = LLAMA_CONTEXT_SIZE,
         .parallel        = LLAMA_PARALLEL,
     };
-
+    //检查llama-server config
     struct server *llama = NULL;
     if (llama_server_init(&llama, &config) != 0) {
         logger_write(LOG_ERROR, "llama-server 配置无效: %s", strerror(errno));
         logger_close();
         return 1;
     }
-
+    //启动llama-server
     if (server_start(llama) != 0) {
         logger_write(LOG_ERROR, "llama-server 启动失败: %s", strerror(errno));
         server_free(llama);
@@ -314,24 +302,25 @@ int main(void)
         return 1;
     }
     logger_write(LOG_INFO, "llama-server 已启动 pid=%d", (int)llama->pid);
-
-    // 2. 注册信号（在轮询就绪前注册，等待期间也能响应 Ctrl+C）
+    
+    // 2. 注册信号处理函数
+    //使在server收到ctrl+c或者被kill的时候能正确退出
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = on_signal;
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0; // 不加 SA_RESTART：让 accept 被信号打断以检查 g_stop
+    sa.sa_flags = 0; // 不加 SA_RESTART：让 accept 被信号打断以后执行循环体后面的逻辑，并有机会检查 g_stop结束循环
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
-
+    //使server在收到子进程退出信号以后能正确回收子进程
     struct sigaction sa_chld;
     memset(&sa_chld, 0, sizeof(sa_chld));
     sa_chld.sa_handler = on_sigchld;
     sigemptyset(&sa_chld.sa_mask);
     sa_chld.sa_flags = SA_RESTART;
     sigaction(SIGCHLD, &sa_chld, NULL);
-
-    signal(SIGPIPE, SIG_IGN); // 向已断开的客户端写数据时不让进程被杀
+    // 向已断开的客户端写数据时不让进程被杀
+    signal(SIGPIPE, SIG_IGN); 
 
     // 3. 等待 llama-server 加载模型并就绪
     if (wait_llama_ready(llama_url, LLAMA_READY_TIMEOUT_S) != 0) {
@@ -342,7 +331,7 @@ int main(void)
     }
     logger_write(LOG_INFO, "llama-server 已就绪 %s", llama_url);
 
-    // 4. 监听客户端端口
+    // 4. 注册监听客户端端口
     int listen_fd = server_listen(SERVER_PORT);
     if (listen_fd < 0) {
         logger_write(LOG_ERROR, "监听端口 %d 失败", SERVER_PORT);
@@ -354,6 +343,7 @@ int main(void)
 
     // 5. 主循环：每个客户端连接 fork 一个子进程处理
     while (!g_stop) {
+        //accept子进程
         struct sockaddr_in client_addr;
         int client_fd = server_accept_client(listen_fd, &client_addr);
         if (client_fd < 0) {
@@ -363,27 +353,28 @@ int main(void)
             logger_write(LOG_ERROR, "accept 失败: %s", strerror(errno));
             continue;
         }
-
+        //创建子进程
         pid_t pid = fork();
-        if (pid < 0) {
+        if (pid < 0) {//子进程创建失败
             logger_write(LOG_ERROR, "fork 失败: %s", strerror(errno));
             close(client_fd);
             continue;
         }
-
         if (pid == 0) {
-            // 子进程：只处理连接，不监听
+            // 子进程
+            //关闭监听套接字并重置信号处理函数
             close(listen_fd);
             signal(SIGINT, SIG_DFL);
             signal(SIGTERM, SIG_DFL);
             signal(SIGCHLD, SIG_DFL);
+            //执行子进程处理逻辑
             handle_client(client_fd, llama_url);
             _exit(0);
         }
 
         // 父进程：继续监听下一个连接
         close(client_fd);
-
+        //获取子进程地址
         char ip[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &client_addr.sin_addr, ip, sizeof(ip));
         logger_write(LOG_INFO, "客户端连接 %s:%d fd=%d pid=%d",

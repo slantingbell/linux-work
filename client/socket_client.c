@@ -185,6 +185,7 @@ int client_receive_stream(struct client_connection *conn)
             conn->receive_len = remaining; //更新持久缓冲区中有效信息长度
             return 0; //结束本次读取
         }
+        //没找到结束标记
         size_t keep = STREAM_END_LEN - 1; //末尾至少保留4个字节，防止结束标记的一部分被输出之后，后续搜索不到结束标志
         if (conn->receive_len > keep)
         {

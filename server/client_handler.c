@@ -26,7 +26,7 @@ ssize_t client_receive_request(
 
     while (1) {
         // 批量接收数据
-        ssize_t n = recv(    //这玩意是覆盖写入  
+        ssize_t n = recv(    //这玩意是覆盖写入 ，阻塞模式
             client_fd,
             incoming,
             sizeof(incoming),
