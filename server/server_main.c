@@ -24,7 +24,7 @@
 #define LLAMA_MODEL_PATH        "./models/qwen2.5-1.5b-instruct-q4_k_m.gguf"
 #define LLAMA_HOST              "127.0.0.1"
 #define LLAMA_PORT              8080
-#define LLAMA_CONTEXT_SIZE      4096
+#define LLAMA_CONTEXT_SIZE      4096 
 #define LLAMA_PARALLEL          4
 #define LLAMA_READY_TIMEOUT_S   120
 
@@ -47,8 +47,8 @@ static void on_sigchld(int sig)
 {
     int saved_errno = errno;
     (void)sig;
-    server_reap_children();
-    errno = saved_errno;
+    server_reap_children(); //回收子进程
+    errno = saved_errno;    
 }
 
 // 循环发送直到全部发出，供服务端内部使用
@@ -56,9 +56,9 @@ static int send_all(int fd, const char *data, size_t len)
 {
     size_t sent = 0;
     while (sent < len) {
-        ssize_t n = send(fd, data + sent, len - sent, MSG_NOSIGNAL);
+        ssize_t n = send(fd, data + sent, len - sent, MSG_NOSIGNAL);//MSG_NOSIGNAL：向已断开的客户端写数据时不让进程被杀
         if (n < 0) {
-            if (errno == EINTR) {
+            if (errno == EINTR) {//EINTR：被信号中断，重新尝试
                 continue;
             }
             return -1;

@@ -279,6 +279,7 @@ int server_start(struct server *server)
             "--port", port_str,
             "-c", context_str,
             "-np", parallel_str,
+            "--log-disable",
             (char *)NULL
         );
 

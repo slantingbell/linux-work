@@ -3,9 +3,11 @@
 #include <string.h>
 #include <json-c/json.h>
 
-#define SSE_DATA_PREFIX "data:"
-#define SSE_DONE_MARK   "[DONE]"
-
+#define SSE_DATA_PREFIX "data:"  //SSE数据格式前缀
+#define SSE_DONE_MARK   "[DONE]" //完成标记
+/**
+ * 初始化see解析器
+ */
 void sse_parser_init(struct sse_parser *parser)
 {
     if (parser == NULL) {
@@ -18,8 +20,8 @@ void sse_parser_init(struct sse_parser *parser)
 // 处理一条完整的 SSE 行（不含 '\n'）
 static int sse_handle_line(
     struct sse_parser *parser,
-    sse_token_callback callback,
-    void *userdata
+    sse_token_callback callback,//每一token输入的回调函数
+    void *userdata 
 )
 {
     size_t len = parser->line_len;
@@ -58,7 +60,11 @@ static int sse_handle_line(
         // 无法解析的行不视为致命错误，直接跳过
         return 0;
     }
-
+    /**
+     *将拿到的paylaod进行解析，llama-server返回的流式token格式：
+     *  chocies:[delta:{content:"xxxx"}]
+     * 解析出content的内容，调用回调函数callback
+     */
     struct json_object *choices = NULL;
     struct json_object *delta = NULL;
     struct json_object *content = NULL;
@@ -81,11 +87,17 @@ static int sse_handle_line(
             }
         }
     }
-
+    /*
+    *释放JSON对象资源
+    */
     json_object_put(root);
     return 0;
 }
 
+
+/**
+ * 处理一段 SSE 字节流，逐行解析
+ */
 int sse_parser_feed(
     struct sse_parser *parser,
     const char *data,
